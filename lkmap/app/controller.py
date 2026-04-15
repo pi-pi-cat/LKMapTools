@@ -199,8 +199,8 @@ class AppController(QObject):
         fcx, fcy = sp(cx, cy)
         r_mask   = icon.radius * scale
 
-        # Dashed search boundary (yellow)
-        search_r = int(min(w, h) * 0.45) * scale
+        # Dashed search boundary (yellow) — 与 icon_detector._SEARCH_RATIO 一致
+        search_r = int(min(w, h) // 2 * 0.90) * scale
         for a in range(0, 360, 12):
             cv2.ellipse(vis, (fcx, fcy), (search_r, search_r),
                         0, a, a + 6, (0, 220, 255), max(1, scale))

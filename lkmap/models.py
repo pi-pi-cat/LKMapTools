@@ -319,7 +319,7 @@ class IconMask:
 
 @dataclass(slots=True)
 class AppSettings:
-    config_path: str = "config/settings.json"
+    config_path: str = "config/settings.toml"
     capture_region: CaptureRegion | None = None
     assets: AssetPaths = field(default_factory=AssetPaths)
     view: ViewSettings = field(default_factory=ViewSettings)
@@ -330,7 +330,7 @@ class AppSettings:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AppSettings":
         return cls(
-            config_path=str(data.get("config_path", "config/settings.json")),
+            config_path=str(data.get("config_path", "config/settings.toml")),
             capture_region=CaptureRegion.from_dict(data.get("capture_region")),
             assets=AssetPaths.from_dict(data.get("assets")),
             view=ViewSettings.from_dict(data.get("view")),

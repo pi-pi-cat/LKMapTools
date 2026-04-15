@@ -1,35 +1,19 @@
-from __future__ import annotations
-
-import json
-from pathlib import Path
-from typing import Any
-
-import tomlkit
-from tomlkit.toml_document import TOMLDocument
-
-from lkmap.models import AppSettings, CaptureRegion, ensure_parent_dir
-
-# ── 带注释的 TOML 默认模板 ───────────────────────────────────────────────────
-# 首次运行或从 JSON 迁移时，以此模板为基础生成配置文件。
-# 行注释（# 独占一行）在后续保存时会被 tomlkit 完整保留。
-
-_DEFAULT_TOML = """\
 # ══════════════════════════════════════════════════════════════════
 #  LKMapTools 配置文件
 #  修改后保存即可生效（部分参数需要重启程序）
 #  注释以 # 开头，保存时自动保留
 # ══════════════════════════════════════════════════════════════════
 
-config_path = "config/settings.toml"
+config_path = "config\\settings.toml"
 
 # ── 截图区域 ─────────────────────────────────────────────────────
 # 小地图在屏幕上的位置和尺寸（通过程序内框选自动设置）
 # 全 0 表示尚未配置，一般不需要手动修改
 [capture_region]
-left = 0
-top = 0
-width = 0
-height = 0
+left = 2099
+top = 174
+width = 166
+height = 166
 
 # ── 素材路径 ─────────────────────────────────────────────────────
 [assets]
@@ -44,7 +28,7 @@ legacy_feature_cache_path = "assest/ORB_features.npz"
 
 # ── 视图设置（程序内自动保存）────────────────────────────────────
 [view]
-zoom = 1.0
+zoom = 1.7152597367791003
 show_resources = true
 
 # ── ORB 特征匹配参数 ────────────────────────────────────────────
@@ -157,124 +141,7 @@ position_offset_y = 0
 # 框选小地图时自动检测，一般不需要手动修改
 [icon_mask]
 # 图标中心相对于截图区域左上角的坐标（-1 = 未检测到，使用中心兜底）
-x = -1
-y = -1
+x = 84
+y = 82
 # 遮罩半径（像素）
-radius = 20
-"""
-
-
-def _deep_update_doc(doc: TOMLDocument | dict, data: dict) -> None:
-    """递归更新 tomlkit 文档的值，保留行注释和格式。"""
-    for key, value in data.items():
-        if value is None:
-            continue
-        if isinstance(value, dict):
-            if key not in doc:
-                doc.add(key, tomlkit.table())
-            _deep_update_doc(doc[key], value)
-        else:
-            doc[key] = value
-
-
-class ConfigService:
-    def __init__(self, path: str | Path = "config/settings.toml") -> None:
-        self.path = Path(path)
-        self._legacy_json_path = Path("config/settings.json")
-        self._legacy_config_path = Path("config.json")
-        self._doc: TOMLDocument | None = None
-
-    def load(self) -> AppSettings:
-        if self.path.exists():
-            with self.path.open("r", encoding="utf-8") as f:
-                self._doc = tomlkit.load(f)
-            data: dict = self._doc.unwrap()
-            settings = AppSettings.from_dict(data)
-        elif self._legacy_json_path.exists():
-            settings = self._migrate_from_json(self._legacy_json_path)
-            self.save(settings)
-        elif self._legacy_config_path.exists():
-            settings = self._migrate_legacy_config()
-            self.save(settings)
-        else:
-            settings = AppSettings(config_path=str(self.path))
-            self.save(settings)
-
-        settings.config_path = str(self.path)
-        return settings
-
-    def save(self, settings: AppSettings) -> None:
-        data = settings.to_dict()
-        # TOML 不支持 null，用零值替代未配置的截图区域
-        if data.get("capture_region") is None:
-            data["capture_region"] = {"left": 0, "top": 0, "width": 0, "height": 0}
-
-        if self._doc is None:
-            self._doc = tomlkit.parse(_DEFAULT_TOML)
-
-        _deep_update_doc(self._doc, data)
-        target = ensure_parent_dir(self.path)
-        with target.open("w", encoding="utf-8") as f:
-            tomlkit.dump(self._doc, f)
-
-    def save_capture_region(self, settings: AppSettings, region: CaptureRegion) -> None:
-        settings.capture_region = region
-        self.save(settings)
-
-    def save_view_settings(
-        self, settings: AppSettings, *, zoom: float, show_resources: bool
-    ) -> None:
-        settings.view.zoom = zoom
-        settings.view.show_resources = show_resources
-        self.save(settings)
-
-    # ── 迁移 ──────────────────────────────────────────────────────────────────
-
-    def _migrate_from_json(self, json_path: Path) -> AppSettings:
-        """从 settings.json 迁移到 TOML，保留所有已有配置值。"""
-        with json_path.open("r", encoding="utf-8") as f:
-            data: dict = json.load(f)
-        self._doc = tomlkit.parse(_DEFAULT_TOML)
-        return AppSettings.from_dict(data)
-
-    def _migrate_legacy_config(self) -> AppSettings:
-        """从远古 config.json 格式迁移。"""
-        with self._legacy_config_path.open("r", encoding="utf-8") as f:
-            legacy_data: dict[str, Any] = json.load(f)
-
-        self._doc = tomlkit.parse(_DEFAULT_TOML)
-        settings = AppSettings()
-
-        region = legacy_data.get("MINIMAP")
-        settings.capture_region = CaptureRegion.from_dict(region)
-        settings.assets.map_path = str(
-            legacy_data.get("ORB_MAP_PATH", settings.assets.map_path)
-        )
-        settings.assets.feature_map_path = str(
-            legacy_data.get("ORB_MAP_NOEDGE_PATH", settings.assets.feature_map_path)
-        )
-        settings.assets.points_path = str(
-            legacy_data.get("POINTS_PATH", settings.assets.points_path)
-        )
-        settings.assets.feature_cache_path = "cache/orb_features.npz"
-        settings.view.zoom = 1.0
-
-        settings.orb.map_nfeatures = int(
-            legacy_data.get("ORB_NFEATURES", settings.orb.map_nfeatures)
-        )
-        settings.orb.minimap_nfeatures = int(
-            legacy_data.get("ORB_MINI_NFEATURES", settings.orb.minimap_nfeatures)
-        )
-        settings.orb.min_match_count = int(
-            legacy_data.get("ORB_MIN_MATCH_COUNT", settings.orb.min_match_count)
-        )
-        grid = legacy_data.get(
-            "ORB_GRID", [settings.orb.grid_rows, settings.orb.grid_cols]
-        )
-        if isinstance(grid, list | tuple) and len(grid) == 2:
-            settings.orb.grid_rows = int(grid[0])
-            settings.orb.grid_cols = int(grid[1])
-        settings.orb.max_kp_per_layer = int(
-            legacy_data.get("MAX_KP_PER_LAYER", settings.orb.max_kp_per_layer)
-        )
-        return settings
+radius = 15

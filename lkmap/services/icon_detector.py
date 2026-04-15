@@ -33,8 +33,8 @@ _HSV_UPPER = np.array([38, 255, 255], dtype=np.uint8)
 _BLOB_AREA_MIN = 30
 _BLOB_AREA_MAX = 2500
 
-# Fraction of the minimap half-width used as the outer search boundary
-_SEARCH_RATIO = 0.45
+# 搜索半径 = 小地图半径 × 此比例（尽量覆盖大部分小地图圆形区域）
+_SEARCH_RATIO = 0.90
 
 # Template-matching parameters for candidate verification
 _ROT_STEP  = 15        # rotation step (degrees)
@@ -56,7 +56,7 @@ def detect_player_icon(
     """
     h, w = frame_bgr.shape[:2]
     cx, cy = w // 2, h // 2
-    search_r = int(min(w, h) * _SEARCH_RATIO)
+    search_r = int(min(w, h) // 2 * _SEARCH_RATIO)
 
     blobs = _find_orange_blobs(frame_bgr, cx, cy, search_r)
 
@@ -130,9 +130,10 @@ def _score_blobs_with_template(
     icon_path: str,
 ) -> tuple[int, int, int] | None:
     """
-    For each blob, run multi-angle template matching in a tight window around
-    the blob.  Return the blob with the highest template score, or fall back
-    to the closest-to-centre blob when no template match exceeds the threshold.
+    对每个候选色块做多角度模板匹配，结合距离权重选出最终结果。
+
+    综合得分 = template_score × proximity_weight
+    proximity_weight 随离中心距离线性衰减，确保中心附近的候选有显著优势。
     """
     path = Path(icon_path)
     if not path.exists():
@@ -144,15 +145,21 @@ def _score_blobs_with_template(
 
     ih, iw = icon_bgr.shape[:2]
     fh, fw = frame_bgr.shape[:2]
+    cx, cy = fw // 2, fh // 2
+    max_dist = math.hypot(cx, cy) or 1.0
     frame_gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
 
     scored: list[tuple[float, tuple[int, int, int]]] = []
 
     for blob in blobs:
         bx, by, bradius = blob
-        best_score = _best_template_score_at(frame_gray, bx, by, bradius,
+        tmpl_score = _best_template_score_at(frame_gray, bx, by, bradius,
                                               icon_bgr, ih, iw, fh, fw)
-        scored.append((best_score, blob))
+        dist = math.hypot(bx - cx, by - cy)
+        # 距离权重：中心=1.0，最远处=0.3，避免远处候选因模板碰巧高分而胜出
+        proximity_w = 1.0 - 0.7 * (dist / max_dist)
+        combined = tmpl_score * proximity_w
+        scored.append((combined, blob))
 
     if not scored:
         return None
@@ -161,8 +168,6 @@ def _score_blobs_with_template(
     if best_score >= _TMPL_CONF:
         return best_blob
 
-    # No blob passed the threshold – return the closest to centre as fallback
-    cx, cy = fw // 2, fh // 2
     return min(blobs, key=lambda b: math.hypot(b[0] - cx, b[1] - cy))
 
 

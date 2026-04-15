@@ -9,6 +9,7 @@ dependencies = [
     "numpy>=2.4.4",
     "opencv-contrib-python",
     "pyside6>=6.9.0",
+    "tomlkit>=0.13",
 ]
 
 [build-system]

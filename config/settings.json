@@ -1,0 +1,90 @@
+{
+  "config_path": "config\\settings.json",
+  "capture_region": {
+    "left": 2099,
+    "top": 174,
+    "width": 166,
+    "height": 166
+  },
+  "assets": {
+    "map_path": "assest/raw.png",
+    "feature_map_path": "assest/raw_noedge.png",
+    "points_path": "assest/points.json",
+    "feature_cache_path": "cache/orb_features.npz",
+    "legacy_feature_cache_path": "assest/ORB_features.npz"
+  },
+  "view": {
+    "zoom": 1.7152597367791003,
+    "show_resources": true
+  },
+  "orb": {
+    "map_nfeatures": 300000,
+    "minimap_nfeatures": 2500,
+    "min_match_count": 5,
+    "scale_factor": 1.2,
+    "nlevels": 8,
+    "fast_threshold": 5,
+    "edge_threshold": 25,
+    "grid_rows": 120,
+    "grid_cols": 120,
+    "max_kp_per_layer": 100000,
+    "refresh_interval_ms": 16,
+    "local_search_radius": 800,
+    "local_search_expand_step": 200,
+    "global_search_after_failures": 10,
+    "match_distance_threshold": 50,
+    "max_good_matches": 80,
+    "ransac_threshold": 3.0,
+    "jump_limit": 220,
+    "min_valid_scale": 0.35,
+    "max_valid_scale": 2.2
+  },
+  "template": {
+    "global_scales": [
+      0.8,
+      0.9,
+      1.0,
+      1.1,
+      1.15,
+      1.2,
+      1.25,
+      1.3,
+      1.4,
+      1.6
+    ],
+    "pyramid_factor": 4,
+    "coarse_threshold": 0.12,
+    "match_threshold": 0.3,
+    "canny_low": 50,
+    "canny_high": 150,
+    "local_search_radius": 500,
+    "local_expand_step": 150,
+    "global_search_after_failures": 8,
+    "jump_limit": 250,
+    "refresh_interval_ms": 16,
+    "use_optical_flow": true,
+    "flow_validation_interval": 15,
+    "flow_consistency_threshold": 3.0,
+    "correction_min_drift": 12,
+    "correction_smooth_frames": 8,
+    "transition_dark_threshold": 15,
+    "transition_template_path": "",
+    "offmap_max_failures": 30,
+    "searching_interval": 4,
+    "local_recovery_frames": 6,
+    "hist_scene_break_threshold": 0.7,
+    "static_flow_threshold": 0.5,
+    "static_verify_interval": 30,
+    "use_cuda": true,
+    "flow_win_size": 11,
+    "flow_levels": 2,
+    "flow_iterations": 2,
+    "position_offset_x": 0,
+    "position_offset_y": 0
+  },
+  "icon_mask": {
+    "x": 82,
+    "y": 82,
+    "radius": 15
+  }
+}

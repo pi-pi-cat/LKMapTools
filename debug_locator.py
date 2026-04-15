@@ -27,7 +27,7 @@ from lkmap.services.assets import AssetService
 from lkmap.services.config import ConfigService
 
 
-# ── 参数（和 settings.json 一致，可手动覆盖调试） ─────────────────────────────
+# ── 参数（和 settings.toml 一致，可手动覆盖调试） ─────────────────────────────
 CANNY_LOW = 50
 CANNY_HIGH = 150
 SCALES = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.4, 1.6, 1.8]
