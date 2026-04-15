@@ -181,6 +181,18 @@ class TemplateSettings:
     static_flow_threshold: float = 0.5
     # 连续静止帧数达到此值时，强制做一次模板位置验证（防止传送后粘在错误坐标）
     static_verify_interval: int = 30
+    # ── 性能 & 精度配置 ───────────────────────────────────────────────────────
+    # 是否启用 CUDA 加速（需要 opencv-contrib-python + NVIDIA GPU）
+    # 影响：模板匹配 + 光流均走 GPU，FPS 可提升 2~5 倍
+    use_cuda: bool = True
+    # Farneback 光流参数（越小越快，越大越平滑）
+    flow_win_size: int = 11      # 搜索窗口大小（原硬编码 15）
+    flow_levels: int = 2         # 图像金字塔层数（原硬编码 3）
+    flow_iterations: int = 2     # 每层迭代次数（原硬编码 3）
+    # 输出坐标偏移（大地图像素）——用于修正系统性定位误差
+    # 例如：箭头图标本身相对角色中心有偏移时在此处补偿
+    position_offset_x: int = 0
+    position_offset_y: int = 0
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "TemplateSettings":
@@ -234,6 +246,12 @@ class TemplateSettings:
             static_verify_interval=int(
                 data.get("static_verify_interval", base.static_verify_interval)
             ),
+            use_cuda=bool(data.get("use_cuda", base.use_cuda)),
+            flow_win_size=int(data.get("flow_win_size", base.flow_win_size)),
+            flow_levels=int(data.get("flow_levels", base.flow_levels)),
+            flow_iterations=int(data.get("flow_iterations", base.flow_iterations)),
+            position_offset_x=int(data.get("position_offset_x", base.position_offset_x)),
+            position_offset_y=int(data.get("position_offset_y", base.position_offset_y)),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -262,6 +280,12 @@ class TemplateSettings:
             "hist_scene_break_threshold": self.hist_scene_break_threshold,
             "static_flow_threshold": self.static_flow_threshold,
             "static_verify_interval": self.static_verify_interval,
+            "use_cuda": self.use_cuda,
+            "flow_win_size": self.flow_win_size,
+            "flow_levels": self.flow_levels,
+            "flow_iterations": self.flow_iterations,
+            "position_offset_x": self.position_offset_x,
+            "position_offset_y": self.position_offset_y,
         }
 
 

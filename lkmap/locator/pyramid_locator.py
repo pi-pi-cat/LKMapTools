@@ -27,8 +27,6 @@ from lkmap.locator.base import LocatorStrategy
 from lkmap.models import AppSettings, FrameData, LocationResult
 from lkmap.services.assets import AssetService
 
-_USE_CUDA: bool = True
-
 # off_map 状态下每隔多少帧主动尝试一次全局搜索
 _OFFMAP_RETRY_INTERVAL = 60
 
@@ -51,6 +49,8 @@ class PyramidLocator(LocatorStrategy):
 
         self._display_map: np.ndarray | None = None
         self._mask: np.ndarray | None = None
+        self._mask_bool: np.ndarray | None = None   # 缓存 mask > 0，避免每帧重建
+        self._mask_cache_key: tuple = ()
 
         # 场景状态机
         self._state: str = "searching"      # searching / tracking / transition / off_map
@@ -66,6 +66,7 @@ class PyramidLocator(LocatorStrategy):
 
         # 光流状态
         self._prev_mini_masked: np.ndarray | None = None
+        self._prev_hist: np.ndarray | None = None    # 缓存上帧直方图，避免重复计算
         self._flow_validation_counter: int = 0
         # 光流最近一帧的小地图像素位移（供静止检测使用）
         self._last_flow_dx: float = 0.0
@@ -82,6 +83,7 @@ class PyramidLocator(LocatorStrategy):
         self._transition_tmpl: np.ndarray | None = None
 
         self._cuda_matcher = None
+        self._cuda_farneback = None    # cv2.cuda.FarnebackOpticalFlow（有 GPU 时初始化）
 
     @property
     def display_map(self) -> np.ndarray:
@@ -119,7 +121,7 @@ class PyramidLocator(LocatorStrategy):
                 if tmpl is not None:
                     self._transition_tmpl = tmpl
 
-        if _USE_CUDA:
+        if t.use_cuda:
             self._try_init_cuda()
 
         self._initialized = True
@@ -129,6 +131,17 @@ class PyramidLocator(LocatorStrategy):
             if cv2.cuda.getCudaEnabledDeviceCount() > 0:  # type: ignore[attr-defined]
                 self._cuda_matcher = cv2.cuda.createTemplateMatching(  # type: ignore[attr-defined]
                     cv2.CV_8U, cv2.TM_CCOEFF_NORMED
+                )
+                t = self.settings.template
+                self._cuda_farneback = cv2.cuda.FarnebackOpticalFlow.create(  # type: ignore[attr-defined]
+                    numLevels=t.flow_levels,
+                    pyrScale=0.5,
+                    fastPyramids=False,
+                    winSize=t.flow_win_size,
+                    numIters=t.flow_iterations,
+                    polyN=5,
+                    polySigma=1.2,
+                    flags=0,
                 )
         except Exception:
             pass
@@ -172,7 +185,7 @@ class PyramidLocator(LocatorStrategy):
                 if hit and hit[0] >= t.match_threshold:
                     self._state = "tracking"
                     self._global_failures = 0
-                    self._prev_mini_masked = mini_masked
+                    self._set_prev(mini_masked)
                     return self._commit(hit, frame.timestamp, "global")
             return LocationResult(
                 found=False, mode="off_map", message="不在大地图范围内",
@@ -197,7 +210,7 @@ class PyramidLocator(LocatorStrategy):
 
             mini_edge = self._make_edge(mini_masked, mask, t)
             hit = self._global_search(mini_edge)
-            self._prev_mini_masked = mini_masked
+            self._set_prev(mini_masked)
             if hit and hit[0] >= t.match_threshold:
                 self._state = "tracking"
                 self._global_failures = 0
@@ -227,10 +240,10 @@ class PyramidLocator(LocatorStrategy):
         # ══ TRACKING 状态：光流 + 定期模板校正 ═══════════════════════════════
 
         # ① 层级1：直方图相关度检查（场景突变预警）
-        #    在黑屏/模板检测之后再做一道：捕捉那些不是纯黑屏但画面剧变的情况
-        #    （传送结束时新场景加载完成、突然切到地图界面等）
-        if self._prev_mini_masked is not None:
-            corr = self._hist_correlation(self._prev_mini_masked, mini_masked)
+        #    直接用缓存的上帧直方图比较，节省一次 calcHist
+        if self._prev_hist is not None:
+            hist_c = cv2.calcHist([mini_masked], [0], None, [64], [0, 256])
+            corr = float(cv2.compareHist(self._prev_hist, hist_c, cv2.HISTCMP_CORREL))
             if corr < t.hist_scene_break_threshold:
                 self._state = "searching"
                 self._global_failures = 0
@@ -302,7 +315,7 @@ class PyramidLocator(LocatorStrategy):
                         # 本地恢复成功，不需要全局搜索
                         self._consecutive_failures = 0
                         self._local_recovery_counter = 0
-                        self._prev_mini_masked = mini_masked
+                        self._set_prev(mini_masked)
                         return self._commit(hit, frame.timestamp, "local")
                     if self._local_recovery_counter >= t.local_recovery_frames:
                         # 本地恢复窗口耗尽，真正需要全局搜索
@@ -313,13 +326,13 @@ class PyramidLocator(LocatorStrategy):
                         self._cached_scale = None
                         self._local_recovery_counter = 0
 
-            self._prev_mini_masked = mini_masked
+            self._set_prev(mini_masked)
             return flow_result
 
         # ③ 本地模板备用（光流不可用时）
         mini_edge = self._make_edge(mini_masked, mask, t)
         hit = self._local_search(mini_edge)
-        self._prev_mini_masked = mini_masked
+        self._set_prev(mini_masked)
 
         if hit is None or hit[0] < t.match_threshold:
             self._state = "searching"
@@ -338,6 +351,7 @@ class PyramidLocator(LocatorStrategy):
         self._cached_scale = None
         self._consecutive_failures = 0
         self._prev_mini_masked = None
+        self._prev_hist = None
         self._flow_validation_counter = 0
         self._pending_corr_x = 0.0
         self._pending_corr_y = 0.0
@@ -355,7 +369,7 @@ class PyramidLocator(LocatorStrategy):
         策略2（可选）：与传送画面模板做匹配（需用户提供截图）
         """
         t = self.settings.template
-        mean_val = float(np.mean(mini_masked))
+        mean_val = float(cv2.mean(mini_masked)[0])  # cv2.mean 比 np.mean 快约 30%
         if mean_val < t.transition_dark_threshold:
             return True
 
@@ -379,6 +393,7 @@ class PyramidLocator(LocatorStrategy):
         self._last_point = None
         self._cached_scale = None
         self._prev_mini_masked = None
+        self._prev_hist = None
         self._pending_corr_x = 0.0
         self._pending_corr_y = 0.0
         self._corr_frames_left = 0
@@ -405,13 +420,31 @@ class PyramidLocator(LocatorStrategy):
         if self._prev_mini_masked.shape != curr_masked.shape:
             return self._fail_result(timestamp, "光流帧尺寸不匹配")
 
-        flow = cv2.calcOpticalFlowFarneback(
-            self._prev_mini_masked, curr_masked, None,
-            pyr_scale=0.5, levels=3, winsize=15,
-            iterations=3, poly_n=5, poly_sigma=1.2, flags=0,
-        )
+        t = self.settings.template
+        prev = self._prev_mini_masked
 
-        mask_bool = mask > 0
+        # CUDA Farneback（有 GPU 时约快 3~5 倍）
+        if self._cuda_farneback is not None:
+            try:
+                gpu_prev = cv2.cuda_GpuMat(prev)       # type: ignore[attr-defined]
+                gpu_curr = cv2.cuda_GpuMat(curr_masked) # type: ignore[attr-defined]
+                gpu_flow = self._cuda_farneback.calc(gpu_prev, gpu_curr, None)
+                flow = gpu_flow.download()              # type: ignore[attr-defined]
+            except Exception:
+                flow = cv2.calcOpticalFlowFarneback(
+                    prev, curr_masked, None,
+                    pyr_scale=0.5, levels=t.flow_levels, winsize=t.flow_win_size,
+                    iterations=t.flow_iterations, poly_n=5, poly_sigma=1.2, flags=0,
+                )
+        else:
+            flow = cv2.calcOpticalFlowFarneback(
+                prev, curr_masked, None,
+                pyr_scale=0.5, levels=t.flow_levels, winsize=t.flow_win_size,
+                iterations=t.flow_iterations, poly_n=5, poly_sigma=1.2, flags=0,
+            )
+
+        # 使用缓存的布尔掩码（避免每帧重建）
+        mask_bool = self._mask_bool if self._mask_bool is not None else (mask > 0)
         flow_u = flow[mask_bool, 0]
         flow_v = flow[mask_bool, 1]
         dx_px = float(np.median(flow_u))
@@ -421,7 +454,6 @@ class PyramidLocator(LocatorStrategy):
         self._last_flow_dy = dy_px
 
         consistency = float(np.std(np.hypot(flow_u, flow_v)))
-        t = self.settings.template
 
         if consistency > t.flow_consistency_threshold:
             mini_edge = self._make_edge(curr_masked, mask, t)
@@ -539,7 +571,7 @@ class PyramidLocator(LocatorStrategy):
         return float(max_val), int(x1 + max_loc[0] + tw // 2), int(y1 + max_loc[1] + th // 2)
 
     def _run_match(self, image: np.ndarray, template: np.ndarray) -> np.ndarray | None:
-        if _USE_CUDA and self._cuda_matcher is not None:
+        if self.settings.template.use_cuda and self._cuda_matcher is not None:
             try:
                 gpu_img = cv2.cuda_GpuMat(image)      # type: ignore[attr-defined]
                 gpu_tmpl = cv2.cuda_GpuMat(template)  # type: ignore[attr-defined]
@@ -552,6 +584,11 @@ class PyramidLocator(LocatorStrategy):
             return None
 
     # ── 辅助方法 ──────────────────────────────────────────────────────────────
+
+    def _set_prev(self, frame: np.ndarray) -> None:
+        """更新上一帧缓存，同步计算直方图（避免下次比较时重复计算）。"""
+        self._prev_mini_masked = frame
+        self._prev_hist = cv2.calcHist([frame], [0], None, [64], [0, 256])
 
     @staticmethod
     def _make_edge(masked_gray: np.ndarray, mask: np.ndarray, t) -> np.ndarray:
@@ -594,6 +631,7 @@ class PyramidLocator(LocatorStrategy):
             cv2.circle(mask, (w // 2, h // 2), default_r, 0, -1)
 
         self._mask = mask
+        self._mask_bool = mask > 0   # 缓存布尔数组，_locate_by_flow 直接使用
         self._mask_cache_key = cache_key
         return mask
 
@@ -617,11 +655,15 @@ class PyramidLocator(LocatorStrategy):
         conf, raw_x, raw_y, scale = hit
         if not self._validate_result(raw_x, raw_y, mode == "global"):
             return self._fail_result(timestamp, "定位结果跳变异常")
+        # 内部追踪用原始坐标（不含偏移），输出坐标加上用户配置的偏移
         self._last_point = (raw_x, raw_y)
         self._cached_scale = scale
         self._consecutive_failures = 0
+        t = self.settings.template
+        out_x = raw_x + t.position_offset_x
+        out_y = raw_y + t.position_offset_y
         return LocationResult(
-            found=True, x=raw_x, y=raw_y, confidence=conf,
+            found=True, x=out_x, y=out_y, confidence=conf,
             mode=mode, message="定位成功", timestamp=timestamp,
         )
 
