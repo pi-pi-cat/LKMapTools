@@ -91,7 +91,7 @@ class OrbLocator(LocatorStrategy):
             return self._fail_result(frame.timestamp, "仿射估计失败")
 
         scale = float(np.sqrt(matrix[0, 0] ** 2 + matrix[0, 1] ** 2))
-        if not 0.6 <= scale <= 1.4:
+        if not self.settings.orb.min_valid_scale <= scale <= self.settings.orb.max_valid_scale:
             return self._fail_result(frame.timestamp, "缩放异常")
 
         center = np.array([[[gray.shape[1] / 2, gray.shape[0] / 2]]], dtype=np.float32)

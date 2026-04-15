@@ -47,9 +47,11 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self._status_bar)
         self._state_label = QLabel("State: idle")
         self._coord_label = QLabel("Position: -")
+        self._locate_label = QLabel("定位: 未开始")
         self._zoom_label = QLabel("Zoom: 1.00x")
         self._status_bar.addPermanentWidget(self._state_label)
         self._status_bar.addPermanentWidget(self._coord_label)
+        self._status_bar.addPermanentWidget(self._locate_label)
         self._status_bar.addPermanentWidget(self._zoom_label)
         self.map_view.zoom_changed.connect(self.set_zoom)
 
@@ -59,6 +61,12 @@ class MainWindow(QMainWindow):
             self._status_bar.showMessage(message, 5000)
 
     def set_location(self, result: LocationResult) -> None:
+        locate_text = (
+            f"定位: 成功({result.mode}) 置信度 {result.confidence:.2f}"
+            if result.found
+            else f"定位: 失败({result.message})"
+        )
+        self._locate_label.setText(locate_text)
         if result.x is None or result.y is None:
             self._coord_label.setText("Position: -")
             return
